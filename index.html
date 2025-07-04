@@ -1,0 +1,266 @@
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Localização da Foto no Mapa</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="icon" type="image/png" href="icon-192.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exif-js/2.3.0/exif.min.js"></script>
+  <style>
+    :root {
+      --bg-light: #f9fafb;
+      --bg-dark: #111827;
+      --text-light: #1f2937;
+      --text-dark: #f3f4f6;
+      --primary: #4f46e5;
+      --border: #d1d5db;
+    }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: var(--bg-light);
+      color: var(--text-light);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    body.dark {
+      background-color: var(--bg-dark);
+      color: var(--text-dark);
+    }
+
+    h2 {
+      color: var(--primary);
+      margin-bottom: 15px;
+      text-align: center;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      max-width: 500px;
+      width: 100%;
+    }
+
+    input[type="file"],
+    button {
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 1rem;
+      border: 1px solid var(--border);
+      background-color: #fff;
+      cursor: pointer;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    body.dark input[type="file"],
+    body.dark button {
+      background-color: #1f2937;
+      color: #f3f4f6;
+      border-color: #374151;
+    }
+
+    button:hover {
+      background-color: #4f46e5;
+      color: white;
+    }
+
+    #imagePreview {
+      max-width: 300px;
+      max-height: 300px;
+      margin-top: 20px;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      object-fit: contain;
+      display: none;
+    }
+
+    #map {
+      height: 400px;
+      width: 100%;
+      max-width: 800px;
+      margin-top: 20px;
+      border-radius: 10px;
+      border: 2px solid var(--border);
+    }
+
+    #coords {
+      margin-top: 15px;
+      font-weight: bold;
+      text-align: center;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 600px) {
+      h2 { font-size: 1.4rem; }
+      #map { height: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <h2>Localização da Foto no Mapa</h2>
+
+  <div class="controls">
+    <input type="file" id="imageInput" accept="image/*" />
+    <img id="imagePreview" />
+    <div class="actions">
+      <button id="installButton" style="display:none;">📲 Instalar App</button>
+      <button id="clearButton">Limpar</button>
+      <button id="exportButton">Exportar Coordenadas</button>
+      <button id="toggleTheme">Modo Claro/Escuro</button>
+    </div>
+  </div>
+
+  <div id="map"></div>
+  <p id="coords"></p>
+
+  <script>
+    let mapInstance;
+    let coordsText = "";
+
+    function convertDMSToDD(dms, ref) {
+      const [deg, min, sec] = dms;
+      let dd = deg + min / 60 + sec / 3600;
+      if (ref === "S" || ref === "W") dd = -dd;
+      return dd;
+    }
+
+    function reset() {
+      document.getElementById('coords').textContent = "";
+      document.getElementById('imagePreview').style.display = "none";
+      document.getElementById('imagePreview').src = "";
+      if (mapInstance) {
+        mapInstance.remove();
+        mapInstance = null;
+      }
+    }
+
+    function exportCoords(text) {
+      const blob = new Blob([text], { type: 'text/plain' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'coordenadas.txt';
+      link.click();
+    }
+
+    document.getElementById('imageInput').addEventListener('change', function (e) {
+      reset();
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const preview = document.getElementById('imagePreview');
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+
+      EXIF.getData(file, function () {
+        const lat = EXIF.getTag(this, "GPSLatitude");
+        const lon = EXIF.getTag(this, "GPSLongitude");
+        const latRef = EXIF.getTag(this, "GPSLatitudeRef");
+        const lonRef = EXIF.getTag(this, "GPSLongitudeRef");
+
+        if (lat && lon && latRef && lonRef) {
+          const latitude = convertDMSToDD(lat, latRef);
+          const longitude = convertDMSToDD(lon, lonRef);
+          coordsText = `Coordenadas: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+          document.getElementById('coords').textContent = coordsText;
+          fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`)
+            .then(response => response.json())
+            .then(data => {
+              const address = data.address;
+              const rua = address.road || "Rua não encontrada";
+              const bairro = address.suburb || address.neighbourhood || "Bairro não encontrado";
+              const cidade = address.city || address.town || address.village || "Cidade não encontrada";
+              const estado = address.state || "Estado não encontrado";
+
+              const enderecoCompleto = `\n${rua}, ${bairro}, ${cidade} - ${estado}`;
+              document.getElementById('coords').textContent += enderecoCompleto;
+            })
+            .catch(err => {
+              console.error("Erro ao buscar endereço:", err);
+            });
+
+
+          mapInstance = L.map('map').setView([latitude, longitude], 16);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(mapInstance);
+          L.marker([latitude, longitude]).addTo(mapInstance)
+            .bindPopup('Local da foto')
+            .openPopup();
+        } else {
+          document.getElementById('coords').textContent = "Esta imagem não contém dados de localização GPS.";
+        }
+      });
+    });
+
+    document.getElementById('clearButton').addEventListener('click', reset);
+
+    document.getElementById('exportButton').addEventListener('click', function () {
+      if (coordsText) {
+        exportCoords(coordsText);
+      } else {
+        alert("Nenhuma coordenada disponível para exportar.");
+      }
+    });
+
+    document.getElementById('toggleTheme').addEventListener('click', function () {
+      document.body.classList.toggle('dark');
+    });
+
+    // Instalação PWA
+    let deferredPrompt;
+    const installButton = document.getElementById('installButton');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installButton.style.display = 'inline-block';
+
+      installButton.addEventListener('click', () => {
+        installButton.style.display = 'none';
+        deferredPrompt.prompt();
+
+        deferredPrompt.userChoice.then(choiceResult => {
+          if (choiceResult.outcome === 'accepted') {
+            console.log('Usuário aceitou a instalação');
+          } else {
+            console.log('Usuário recusou a instalação');
+          }
+          deferredPrompt = null;
+        });
+      });
+    });
+
+    window.addEventListener('appinstalled', () => {
+      console.log('App instalado');
+      installButton.style.display = 'none';
+    });
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('service-worker.js')
+        .then(reg => console.log('Service Worker registrado!', reg))
+        .catch(err => console.error('Erro no Service Worker:', err));
+    }
+  </script>
+</body>
+</html>
